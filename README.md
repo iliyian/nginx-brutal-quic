@@ -52,7 +52,7 @@ Brutal 的思路和 TCP 完全不同：**发送端自己声明带宽，按这个
 
 ### 默认关闭
 
-不加 `quic_brutal_tx` 这一行，行为和原版 nginx **逐字节相同**：
+不加 `quic_brutal_tx` 这一行，拥塞控制行为和原版 nginx 相同：
 
 ```c
 /* 所有改动都是这个形状：入口加判断，命中就 goto done */
@@ -182,27 +182,33 @@ nginx -t && nginx -s reload
 | 语法 | `quic_brutal_tx <size>;` |
 | 默认 | `0`（关闭，走 CUBIC） |
 | 上下文 | `http`, `server` |
-| 单位 | **字节/秒**，支持 `k` / `m` 后缀 |
+| 单位 | **字节/秒**，支持 `k` / `m` 后缀，**只接受整数** |
 | 生效时机 | 配置重载后建立的**新连接**；已存在的连接不受影响 |
+
+`quic_brutal_tx` 走 nginx 的 `ngx_parse_size`，后缀是 1024 进制，而且整数部分
+只认数字 —— 小数点、`g` 后缀都会让 `nginx -t` 报 `invalid value`。
+换算公式：**字节/秒 = Mbps × 125000**。
 
 **常用换算：**
 
-| 想要的带宽 | 配置值 |
-|---|---|
-| 50 Mbps | `6.25m` |
-| 100 Mbps | `12.5m` |
-| 200 Mbps | `25m` |
-| 500 Mbps | `62.5m` |
-| 1 Gbps | `125m` |
+| 想要的带宽 | 配置值 | 字节/秒 |
+|---|---|---|
+| 20 Mbps | `2500k` | 2,560,000 |
+| 50 Mbps | `6250000`（或 `6103k`） | 6,250,000 |
+| 100 Mbps | `12500000`（或 `12207k`） | 12,500,000 |
+| 200 Mbps | `25000000`（或 `24414k`） | 25,000,000 |
+| 500 Mbps | `62500000`（或 `61035k`） | 62,500,000 |
+| 1 Gbps | `125000000` | 125,000,000 |
 
-> `m` = 1024×1024，所以 `20m` 约等于 168 Mbps。
+> `m` = 1024×1024 = 1,048,576，所以 `20m` 是 20,971,520 B/s ≈ **168 Mbps**，
+> `45m` ≈ 378 Mbps，`200m` ≈ 1.68 Gbps。写 `m` 时要自己按这个倍率折算。
 >
-> ⚠️ `ngx_parse_size` 不支持 `g` 后缀，1 Gbps 请写 `125m`。
+> ⚠️ 以下写法**都会报错**：`6.25m`、`12.5m`、`62.5m`、`1g`。
 
 **怎么选值：**
 
-1. 实测线路可用带宽（`iperf3` 或实际下载）
-2. **乘 0.7**，作为配置值
+1. 实测线路可用带宽（`iperf3` 或实际下载），单位 Mbps
+2. **乘 0.7**，再乘 125000，得到字节/秒
 3. 观察一周，延迟正常再逐步上调
 
 宁可填低。填低只是浪费一点带宽；填高会顶高队列延迟（见[实测数据](#实测数据)最后一组）。
@@ -229,18 +235,24 @@ nginx 默认值只有 **64 KB**（`ngx_http_v3_module.c`）。XHTTP 这类单流
 |---|---|---|---|---|
 | 1 | CUBIC | 0% | **53.7 Mbps** | 基线，基本吃满 60Mbit |
 | 2 | CUBIC | 2% | **2.18 Mbps** | 跌 96% |
-| 3 | Brutal `45m` | 2% | **50.9 Mbps** | 基本不受影响 |
+| 3 | Brutal `45m`（≈378 Mbps，6.3×） | 2% | **50.9 Mbps** | 基本不受影响 |
 | 4 | CUBIC | 10% | **0.81 Mbps** | 彻底崩 |
-| 5 | Brutal `45m` | 10% | **47.2 Mbps** | **58 倍于 CUBIC** |
-| 6 | Brutal `200m` | 0% | 55.2 Mbps | 故意超发 3.3 倍 |
+| 5 | Brutal `45m`（≈378 Mbps，6.3×） | 10% | **47.2 Mbps** | 吞吐是 CUBIC 的 **58 倍** |
+| 6 | Brutal `200m`（≈1.68 Gbps，28×） | 0% | 55.2 Mbps | 故意大幅超发 |
 
 **第 2 组说明了问题所在**：CUBIC 每次丢包砍掉 30% 窗口，2% 丢包意味着每 50 个包挨一刀，
 窗口根本爬不起来。这是所有基于丢包的 CC 在跨境线路上的通病。
 
-**第 6 组说明了参数敏感性**：速率填成链路容量的 3.3 倍，吞吐并没有变快（55.2 vs 53.7），
+**第 6 组说明了参数敏感性**：速率填到链路容量的约 28 倍，吞吐并没有变快（55.2 vs 53.7），
 但 `tc` 统计显示积压了 **988 KB / 698 个包**在队列里 —— 也就是延迟暴涨。
 它被打服了，不会雪崩，但你会难受。
 
+> ⚠️ **这组数据的配置值远高于链路容量，不能直接当作"推荐值"来理解。**
+> 第 3、5 组用了 `45m`，也就是约 378 Mbps，在 60 Mbit 链路上是 6.3 倍超发；
+> 第 6 组 `200m` 是 28 倍。也就是说这些"丢包下仍保持 50 Mbps"的结果，
+> 是在大幅超发的前提下测出来的，并没有验证"实测带宽 × 0.7"这种合规配置的效果。
+> 合规配置下的抗丢包能力还需要补测。
+>
 > 早期设计文档里我担心"超发会正反馈自激"。实测证伪了这一点：
 > 超出容量时吞吐稳定在链路极限，只是队列堆积。但这个结论只在这个拓扑下验证过，
 > 真实运营商链路上是否会有更差的表现，没有数据。
@@ -275,6 +287,8 @@ burst = max(rate × 4ms, 10 × MTU)
 ```
 
 预算不足一个 MTU 时，算出差多少毫秒能攒够，挂一个定时器再回来发。
+预算不足**并不完全停止发送**：ACK-only 报文仍然会立刻发出，否则对端的发送会被我们的
+令牌桶一起拖住（详见下文"两条发送路径都要扣预算"）。
 
 **这里有个 nginx 的坑**：`ngx_add_timer()` 在 `src/event/ngx_event_timer.h:56` 有个 300ms 的合并逻辑 ——
 如果新定时器的 key 距离已装载的那个不到 300ms，它**静默忽略**新值，保留旧的。
@@ -282,21 +296,58 @@ burst = max(rate × 4ms, 10 × MTU)
 所以不能用 `qc->push`（那个已经被延迟 ACK、socket 重试、帧队列共用）。Brutal 用了自己独立的
 `pace` 事件，并且每次都先 `ngx_del_timer()` 再 `ngx_add_timer()` 绕开合并。
 
-### 三个必须处理的边界
+### 路径迁移：定时器必须先摘下来
+
+`ngx_quic_handle_path_response_frame()` 在客户端地址变化时（WiFi ↔ 4G）会执行
+
+```c
+ngx_memzero(&qc->congestion, sizeof(ngx_quic_congestion_t));
+```
+
+`pace` 事件是 `ngx_quic_congestion_t` 的成员，节点正挂在全局 timer 红黑树上。
+如果直接清零：
+
+- 树上留下一个 `left` / `right` 被清成 NULL 的节点，而 sentinel 不是 NULL，
+  `ngx_event_expire_timers()` 里的 `ngx_rbtree_min()` 会一路走到 NULL 解引用
+  —— **下一个事件循环 worker 就段错误**；
+- 即使没炸，`pace_arm` 看到 `timer_set == 0`，会把同一个节点再插一次。
+
+所以调用方必须在清零**之前**调 `ngx_quic_brutal_cleanup()`（关闭连接路径同理）：
+
+```c
+ngx_quic_brutal_cleanup(qc);      /* del_timer + delete_posted_event */
+
+ngx_memzero(&qc->congestion, sizeof(ngx_quic_congestion_t));
+...
+ngx_quic_brutal_reset(c, qc);     /* 用 qc->conf->brutal_tx 重建 */
+```
+
+### 其它必须处理的边界
 
 1. **`cg->mtu` 只在丢包路径更新**（`ngx_event_quic_ack.c:903`）。Brutal 永远不进丢包路径，
    mtu 会永久停在 1200。所以 Brutal 的代码一律读 `qc->path->mtu`，并每次算窗口时
    同步回 `cg->mtu`。
 
-2. **`ngx_quic_congestion_idle()`** 会重写 CUBIC 的 `k` / `idle_start`。Brutal 下必须整段跳过，
-   否则空闲恢复时窗口会被打回初值。
+2. **`ngx_quic_congestion_idle()`** 在 CUBIC 下会改写 `k` / `idle_start`。Brutal 下整段跳过：
+   这两个字段只被 CUBIC 的增窗逻辑读，而 Brutal 的窗口每次 ACK 都从 srtt 重算。
+   （跳过本身无害，但别指望它是"防止窗口被打回初值"——窗口并不会被打回。）
 
 3. **`ngx_quic_persistent_congestion()`** 会把窗口砸到 `2 × mtu`。这个函数恰好在
    "长时间没有 ACK" 时触发 —— 而 Brutal 的设计就是要无视这种情况，必须提前 return。
 
-另有一个容易忽略的：**`ngx_quic_get_connection(c)` 在 `ngx_quic_new_connection()` 执行期间返回 NULL**，
-因为反向指针 `qsock->quic = qc` 要到之后的 `ngx_quic_listen()` 才赋值。所以
-`ngx_quic_brutal_init()` 显式接收 `qc` 指针，不走那个宏。
+4. **`ngx_quic_get_connection(c)` 在 `ngx_quic_new_connection()` 执行期间返回 NULL**，
+   因为反向指针 `qsock->quic = qc` 要到之后的 `ngx_quic_listen()` 才赋值。所以
+   `ngx_quic_brutal_init()` 显式接收 `qc` 指针，不走那个宏。
+
+### 两条发送路径都要扣预算
+
+- **单报文路径**（`ngx_quic_create_datagrams`，`quic_gso` 关闭时的默认路径）：
+  预算不足时不再直接 `break`，而是照常走一趟、只允许发出 ACK-only 报文，再挂 pacing 定时器。
+  否则纯 ACK 也会被压到攒够一个 MTU 之后，对端会跟着停等。
+- **GSO 聚合路径**（`ngx_quic_create_segments`）：预算在整批 `sendmsg()` **之后**才扣，
+  所以循环里的检查必须问"当前已攒的 + 下一个 segment"够不够，只问 `segsize`
+  会让整批（最多 64 个 datagram）凭一个 segment 的预算通过。`quic_gso` 默认关闭，
+  但开了就必须是对的。
 
 ---
 
@@ -311,8 +362,8 @@ burst = max(rate × 4ms, 10 × MTU)
    改速率要 `nginx -s reload`，且只影响 reload 之后的新连接。
 
 3. **可能影响同机其它连接。**
-   每条连接独立按配置速率发，没有全局仲裁。一条 `quic_brutal_tx 1g` 的连接可以饿死同机的 CUBIC 连接。
-   这是 hysteria 这类方案的固有问题。
+   每条连接独立按配置速率发，没有全局仲裁。一条 `quic_brutal_tx 125000000`（1 Gbps）的连接
+   可以饿死同机的 CUBIC 连接。这是 hysteria 这类方案的固有问题。
 
 4. **定时器开销。**
    `ngx_add_timer` 精度是毫秒，所以 pace 定时器最快 1ms 一次。预算不足的连接大约每秒唤醒
@@ -322,7 +373,14 @@ burst = max(rate × 4ms, 10 × MTU)
    其它版本需要确认补丁能否干净应用（CI 里会做 `patch --dry-run`）。
 
 6. **`quic_bpf` / 多地址迁移场景未做压力测试。**
-   路径迁移的重建逻辑写了（`ngx_quic_brutal_reset()`），但没有实战验证。
+   路径迁移的重建逻辑写了（`ngx_quic_brutal_cleanup()` + `ngx_quic_brutal_reset()`），
+   但只有代码路径核对，没有实战验证。
+
+7. **不提供 RFC 9221 QUIC DATAGRAM 支持。**
+   nginx 的 QUIC 栈本身就没有 DATAGRAM 帧（`NGX_QUIC_FT_*` 里没有 `0x30/0x31`，
+   传输参数里也没有 `max_datagram_frame_size`）。Brutal 只是替换拥塞控制，
+   数据仍然走 HTTP/3 stream。注意这和 hysteria2 的用法不同 ——
+   那边 Brutal 跑在它自己的 DATAGRAM 协议上。
 
 ---
 
@@ -343,8 +401,8 @@ src/event/quic/ngx_event_quic_brutal.c   全部 Brutal 逻辑（窗口、ack率�
 | `src/event/quic/ngx_event_quic_connection.h` | `ngx_quic_congestion_t` 末尾加 `brutal` 子结构 + include |
 | `src/event/quic/ngx_event_quic.c` | 连接建立时初始化；关闭时清理私有定时器 |
 | `src/event/quic/ngx_event_quic_ack.c` | 4 个分流点：ack / lost / idle / persistent_congestion；acked 包计数 |
-| `src/event/quic/ngx_event_quic_output.c` | pacer 门控（datagram 路径 + GSO 路径 + `allow_segmentation`） |
-| `src/event/quic/ngx_event_quic_migration.c` | 路径迁移后重建（`memzero` 会连 brutal 一起清掉） |
+| `src/event/quic/ngx_event_quic_output.c` | pacer 门控（单报文路径 + GSO 路径 + `allow_segmentation`） |
+| `src/event/quic/ngx_event_quic_migration.c` | 路径迁移：`memzero` 前先 `ngx_quic_brutal_cleanup()`，之后 `_reset()` |
 | `src/http/v3/ngx_http_v3_module.c` | 注册 `quic_brutal_tx` 指令 |
 | `auto/modules` | 新文件加入 `ngx_event_quic_module` 的编译列表 |
 
@@ -375,6 +433,9 @@ typedef struct {
 - 未启用时整体全零，CUBIC 路径完全不受影响
 - 未来 rebase 上游时，冲突只落在单行 guard 上
 
+代价是路径迁移的 `ngx_memzero()` 会把 `pace` 的 `timer_set` / `rbtree` 链接一起清掉，
+所以清理、重建必须成对出现（见上文"路径迁移"）。
+
 ---
 
 ## 构建
@@ -389,30 +450,40 @@ docker build -t nginx-brutal-quic .
 
 ```bash
 VERSION=1.31.8
-curl -fsSL "https://nginx.org/download/nginx-${VERSION}.tar.gz" | tar xz
+SHA256=0652b760b3b772d2ec17b47c2fc15d9a95e6fe35cd5b877eadc1a62d9bc75af1
+
+curl -fsSL -O "https://nginx.org/download/nginx-${VERSION}.tar.gz"
+echo "${SHA256}  nginx-${VERSION}.tar.gz" | sha256sum -c -
+tar xzf "nginx-${VERSION}.tar.gz"
 cd "nginx-${VERSION}"
 patch -p1 < ../patches/nginx-brutal-quic.patch
 
-# 按你的需要裁剪模块；下面这组和官方 nginx:mainline 镜像一致
+# 按你的需要裁剪模块；下面这组和官方镜像一致
 ./configure \
     --prefix=/etc/nginx --sbin-path=/usr/sbin/nginx \
     --with-compat --with-threads --with-file-aio \
     --with-http_ssl_module --with-http_v2_module --with-http_v3_module \
     --with-http_stub_status_module --with-http_realip_module \
     --with-stream --with-stream_ssl_module --with-stream_ssl_preread_module \
-    --with-cc-opt='-O2 -Werror'
+    --with-cc-opt="-O2 -Werror -U_FORTIFY_SOURCE \
+                   -Wp,-D_FORTIFY_SOURCE=2 -fstack-protector-strong" \
+    --with-ld-opt="-Wl,-z,relro -Wl,-z,now"
 
 make -j"$(nproc)"
 ```
 
 > nginx 1.31 的 QUIC 需要 **OpenSSL ≥ 3.5**（走 `SSL_set_quic_tls_cbs`）或 BoringSSL/quictls。
 > Debian 13 / Ubuntu 26.04 自带的 OpenSSL 3.5.x 满足要求。
+>
+> 加固参数（`FORTIFY_SOURCE` / `stack-protector-strong` / `relro` / `now`）和官方
+> nginx 镜像保持一致。`-U_FORTIFY_SOURCE` 不能省：gcc 15 起默认预定义
+> `_FORTIFY_SOURCE=3`，重复定义在 `-Werror` 下会直接把 configure 打挂。
 
 ### CI
 
 `.github/workflows/build.yml` 在每次 push 时：
 
-1. 下载干净的 nginx 源码，`patch --dry-run` 验证补丁能应用
+1. 下载干净的 nginx 源码，校验 SHA-256，`patch --dry-run` 验证补丁能应用
 2. 多架构构建（`linux/amd64`, `linux/arm64`）
 3. 推到 `ghcr.io/iliyian/nginx-brutal-quic`
 
@@ -421,6 +492,10 @@ make -j"$(nproc)"
 ## 测试
 
 `tools/` 下两个小工具，不依赖 curl 的 HTTP/3 支持（大多数发行版的 curl 没编译进去）。
+
+两个工具各自是独立的 Go module，根目录的 `go.work` 把它们串起来，
+所以在仓库根目录就能直接 `go run` / `go build`。`h3probe` 的 `go.sum` 已经提交；
+如果你改了 `go.mod`，跑一次 `go mod tidy` 重新生成。
 
 ### h3upstream
 

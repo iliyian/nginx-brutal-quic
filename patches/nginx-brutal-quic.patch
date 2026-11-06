@@ -1,6 +1,8 @@
+diff --git a/auto/modules b/auto/modules
+index 99e7b4f..501c0d3 100644
 --- a/auto/modules
 +++ b/auto/modules
-@@ -1433,6 +1433,7 @@
+@@ -1433,6 +1433,7 @@ if [ $USE_OPENSSL_QUIC = YES ]; then
                       src/event/quic/ngx_event_quic_ack.h \
                       src/event/quic/ngx_event_quic_output.h \
                       src/event/quic/ngx_event_quic_socket.h \
@@ -8,7 +10,7 @@
                       src/event/quic/ngx_event_quic_openssl_compat.h"
      ngx_module_srcs="src/event/quic/ngx_event_quic.c \
                       src/event/quic/ngx_event_quic_udp.c \
-@@ -1447,6 +1448,7 @@
+@@ -1447,6 +1448,7 @@ if [ $USE_OPENSSL_QUIC = YES ]; then
                       src/event/quic/ngx_event_quic_ack.c \
                       src/event/quic/ngx_event_quic_output.c \
                       src/event/quic/ngx_event_quic_socket.c \
@@ -16,9 +18,11 @@
                       src/event/quic/ngx_event_quic_openssl_compat.c"
  
      ngx_module_libs=
+diff --git a/src/event/quic/ngx_event_quic.c b/src/event/quic/ngx_event_quic.c
+index 1802ea6..f2a403f 100644
 --- a/src/event/quic/ngx_event_quic.c
 +++ b/src/event/quic/ngx_event_quic.c
-@@ -319,6 +319,14 @@
+@@ -319,6 +319,14 @@ ngx_quic_new_connection(ngx_connection_t *c, ngx_quic_conf_t *conf,
      qc->congestion.mtu = NGX_QUIC_MIN_INITIAL_SIZE;
      qc->congestion.recovery_start = ngx_current_msec - 1;
  
@@ -33,42 +37,34 @@
      qc->max_frames = (conf->max_concurrent_streams_uni
                        + conf->max_concurrent_streams_bidi)
                       * conf->stream_buffer_size / 2000;
-@@ -566,6 +574,10 @@
+@@ -566,6 +574,8 @@ ngx_quic_close_connection(ngx_connection_t *c, ngx_int_t rc)
          ngx_del_timer(&qc->push);
      }
  
-+    if (qc->congestion.brutal.pace.timer_set) {
-+        ngx_del_timer(&qc->congestion.brutal.pace);
-+    }
++    ngx_quic_brutal_cleanup(qc);
 +
      if (qc->pto.timer_set) {
          ngx_del_timer(&qc->pto);
      }
-@@ -578,6 +590,10 @@
-         ngx_delete_posted_event(&qc->push);
-     }
- 
-+    if (qc->congestion.brutal.pace.posted) {
-+        ngx_delete_posted_event(&qc->congestion.brutal.pace);
-+    }
-+
-     if (qc->key_update.posted) {
-         ngx_delete_posted_event(&qc->key_update);
-     }
+diff --git a/src/event/quic/ngx_event_quic.h b/src/event/quic/ngx_event_quic.h
+index e26673a..64b4c45 100644
 --- a/src/event/quic/ngx_event_quic.h
 +++ b/src/event/quic/ngx_event_quic.h
-@@ -94,6 +94,8 @@
-     ngx_int_t                      stream_reject_code_uni;
-     ngx_int_t                      stream_reject_code_bidi;
+@@ -99,6 +99,9 @@ typedef struct {
  
-+    size_t                         brutal_tx;   /* bytes/sec, 0 = CUBIC */
+     u_char                         av_token_key[NGX_QUIC_AV_KEY_LEN];
+     u_char                         sr_token_key[NGX_QUIC_SR_KEY_LEN];
 +
-     ngx_quic_init_pt               init;
-     ngx_quic_shutdown_pt           shutdown;
++    /* appended, not inserted: keeps the pre-existing layout untouched */
++    size_t                         brutal_tx;   /* bytes/sec, 0 = CUBIC */
+ } ngx_quic_conf_t;
  
+ 
+diff --git a/src/event/quic/ngx_event_quic_ack.c b/src/event/quic/ngx_event_quic_ack.c
+index abd3f7a..b42d56f 100644
 --- a/src/event/quic/ngx_event_quic_ack.c
 +++ b/src/event/quic/ngx_event_quic_ack.c
-@@ -30,6 +30,7 @@
+@@ -30,6 +30,7 @@ typedef struct {
      ngx_msec_t                               max_pn;
      ngx_msec_t                               oldest;
      ngx_msec_t                               newest;
@@ -76,7 +72,7 @@
  } ngx_quic_ack_stat_t;
  
  
-@@ -131,6 +132,7 @@
+@@ -131,6 +132,7 @@ ngx_quic_handle_ack_frame(ngx_connection_t *c, ngx_quic_header_t *pkt,
  
      send_time.oldest = NGX_TIMER_INFINITE;
      send_time.newest = NGX_TIMER_INFINITE;
@@ -84,7 +80,7 @@
  
      if (ngx_quic_handle_ack_frame_range(c, ctx, min, max, &send_time)
          != NGX_OK)
-@@ -253,6 +255,7 @@
+@@ -253,6 +255,7 @@ static ngx_int_t
  ngx_quic_handle_ack_frame_range(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx,
      uint64_t min, uint64_t max, ngx_quic_ack_stat_t *st)
  {
@@ -92,7 +88,7 @@
      ngx_uint_t              found;
      ngx_queue_t            *q;
      ngx_quic_frame_t       *f;
-@@ -260,6 +263,8 @@
+@@ -260,6 +263,8 @@ ngx_quic_handle_ack_frame_range(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx,
  
      qc = ngx_quic_get_connection(c);
  
@@ -101,7 +97,7 @@
      if (ctx->level == NGX_QUIC_ENCRYPTION_APPLICATION) {
          if (ngx_quic_handle_path_mtu(c, qc->path, min, max) != NGX_OK) {
              return NGX_ERROR;
-@@ -281,6 +286,11 @@
+@@ -281,6 +286,11 @@ ngx_quic_handle_ack_frame_range(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx,
          }
  
          if (f->pnum >= min) {
@@ -113,7 +109,7 @@
              ngx_quic_congestion_ack(c, f);
  
              switch (f->type) {
-@@ -367,6 +377,11 @@
+@@ -367,6 +377,11 @@ ngx_quic_congestion_ack(ngx_connection_t *c, ngx_quic_frame_t *f)
  
      cg->in_flight -= f->plen;
  
@@ -125,7 +121,7 @@
      /* prevent recovery_start from wrapping */
  
      timer = now - cg->recovery_start;
-@@ -516,6 +531,12 @@
+@@ -516,6 +531,12 @@ ngx_quic_congestion_idle(ngx_connection_t *c, ngx_uint_t idle)
      ngx_log_debug1(NGX_LOG_DEBUG_EVENT, c->log, 0,
                     "quic congestion idle:%ui", idle);
  
@@ -138,7 +134,7 @@
      if (cg->window >= cg->ssthresh) {
          /* RFC 9438, 5.8. Behavior for Application-Limited Flows */
  
-@@ -682,6 +703,10 @@
+@@ -682,6 +703,10 @@ ngx_quic_detect_lost(ngx_connection_t *c, ngx_quic_ack_stat_t *st)
          }
      }
  
@@ -149,7 +145,7 @@
      ngx_quic_set_lost_timer(c);
  
      return NGX_OK;
-@@ -714,6 +739,11 @@
+@@ -714,6 +739,11 @@ ngx_quic_persistent_congestion(ngx_connection_t *c)
      qc = ngx_quic_get_connection(c);
      cg = &qc->congestion;
  
@@ -161,7 +157,7 @@
      cg->mtu = qc->path->mtu;
      cg->recovery_start = ngx_quic_oldest_sent_packet(c) - 1;
      cg->window = cg->mtu * 2;
-@@ -878,6 +908,11 @@
+@@ -878,6 +908,11 @@ ngx_quic_congestion_lost(ngx_connection_t *c, ngx_quic_frame_t *f)
      cg->in_flight -= f->plen;
      f->plen = 0;
  
@@ -173,226 +169,12 @@
      timer = f->send_time - cg->recovery_start;
  
      now = ngx_current_msec;
---- a/src/event/quic/ngx_event_quic_connection.h
-+++ b/src/event/quic/ngx_event_quic_connection.h
-@@ -48,6 +48,7 @@
- #include <ngx_event_quic_ack.h>
- #include <ngx_event_quic_output.h>
- #include <ngx_event_quic_socket.h>
-+#include <ngx_event_quic_brutal.h>
- #if (NGX_QUIC_BPF)
- #include <ngx_event_quic_bpf.h>
- #endif
-@@ -186,6 +187,8 @@
-     ngx_msec_t                        idle_start;
-     ngx_msec_t                        k;
-     ngx_uint_t                        idle; /* unsigned  idle:1; */
-+
-+    ngx_quic_brutal_t                 brutal;
- } ngx_quic_congestion_t;
- 
- 
---- a/src/event/quic/ngx_event_quic_migration.c
-+++ b/src/event/quic/ngx_event_quic_migration.c
-@@ -189,6 +189,8 @@
-         qc->congestion.mtu = NGX_QUIC_MIN_INITIAL_SIZE;
-         qc->congestion.recovery_start = ngx_current_msec - 1;
- 
-+        ngx_quic_brutal_reset(c, qc);
-+
-         ngx_quic_init_rtt(qc);
-     }
- 
---- a/src/event/quic/ngx_event_quic_output.c
-+++ b/src/event/quic/ngx_event_quic_output.c
-@@ -134,6 +134,11 @@
- #endif
- 
-     do {
-+        if (cg->brutal.enabled && !ngx_quic_brutal_has_budget(c, cg->mtu)) {
-+            ngx_quic_brutal_pace_arm(c);
-+            break;
-+        }
-+
-         p = dst;
- 
-         len = ngx_quic_path_limit(c, path, path->mtu);
-@@ -160,7 +165,10 @@
-             }
- 
-             n = ngx_quic_output_packet(c, ctx, p, len, min,
--                                       cg->in_flight >= cg->window);
-+                                       (cg->in_flight >= cg->window)
-+                                       || (cg->brutal.enabled
-+                                           && !ngx_quic_brutal_has_budget(
-+                                                  c, cg->mtu)));
-             if (n == NGX_ERROR) {
-                 return NGX_ERROR;
-             }
-@@ -188,6 +196,10 @@
- 
-         ngx_quic_commit_send(c);
- 
-+        if (cg->brutal.enabled) {
-+            ngx_quic_brutal_on_sent(c, len);
-+        }
-+
-         path->sent += len;
- 
-     } while (cg->in_flight < cg->window);
-@@ -322,6 +334,12 @@
-             return 0;
-         }
- 
-+        if (qc->congestion.brutal.enabled
-+            && !ngx_quic_brutal_has_budget(c, len * 3)) {
-+            /* not enough budget for a batch: emit single datagrams */
-+            return 0;
-+        }
-+
-         if (bytes > len * 3) {
-             /* require at least ~3 full packets to batch */
-             return 1;
-@@ -369,7 +387,9 @@
- 
-         len = ngx_min(segsize, (size_t) (end - p));
- 
--        if (len && cg->in_flight + (p - dst) < cg->window) {
-+        if (len && cg->in_flight + (p - dst) < cg->window
-+            && (!cg->brutal.enabled
-+                || ngx_quic_brutal_has_budget(c, segsize))) {
- 
-             n = ngx_quic_output_packet(c, ctx, p, len, len, 0);
-             if (n == NGX_ERROR) {
-@@ -404,6 +424,10 @@
- 
-             ngx_quic_commit_send(c);
- 
-+            if (cg->brutal.enabled) {
-+                ngx_quic_brutal_on_sent(c, p - dst);
-+            }
-+
-             path->sent += n;
- 
-             p = dst;
---- a/src/http/v3/ngx_http_v3_module.c
-+++ b/src/http/v3/ngx_http_v3_module.c
-@@ -64,6 +64,13 @@
-       offsetof(ngx_http_v3_srv_conf_t, quic.gso_enabled),
-       NULL },
- 
-+    { ngx_string("quic_brutal_tx"),
-+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
-+      ngx_conf_set_size_slot,
-+      NGX_HTTP_SRV_CONF_OFFSET,
-+      offsetof(ngx_http_v3_srv_conf_t, quic.brutal_tx),
-+      NULL },
-+
-     { ngx_string("quic_host_key"),
-       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
-       ngx_http_quic_host_key,
-@@ -206,6 +213,7 @@
-     h3scf->quic.max_concurrent_streams_uni = NGX_HTTP_V3_MAX_UNI_STREAMS;
-     h3scf->quic.retry = NGX_CONF_UNSET;
-     h3scf->quic.gso_enabled = NGX_CONF_UNSET;
-+    h3scf->quic.brutal_tx = NGX_CONF_UNSET_SIZE;
-     h3scf->quic.stream_close_code = NGX_HTTP_V3_ERR_NO_ERROR;
-     h3scf->quic.stream_reject_code_bidi = NGX_HTTP_V3_ERR_REQUEST_REJECTED;
-     h3scf->quic.active_connection_id_limit = NGX_CONF_UNSET_UINT;
-@@ -243,6 +251,7 @@
- 
-     ngx_conf_merge_value(conf->quic.retry, prev->quic.retry, 0);
-     ngx_conf_merge_value(conf->quic.gso_enabled, prev->quic.gso_enabled, 0);
-+    ngx_conf_merge_size_value(conf->quic.brutal_tx, prev->quic.brutal_tx, 0);
- 
-     ngx_conf_merge_str_value(conf->quic.host_key, prev->quic.host_key, "");
- 
---- a/src/event/quic/ngx_event_quic_brutal.h
-+++ b/src/event/quic/ngx_event_quic_brutal.h
-@@ -0,0 +1,80 @@
-+/*
-+ * Copyright (C) Nginx, Inc.
-+ */
-+
-+
-+#ifndef _NGX_EVENT_QUIC_BRUTAL_H_INCLUDED_
-+#define _NGX_EVENT_QUIC_BRUTAL_H_INCLUDED_
-+
-+
-+#include <ngx_config.h>
-+#include <ngx_core.h>
-+#include <ngx_event.h>
-+
-+
-+/*
-+ * Brutal congestion control, ported from hysteria2.
-+ *
-+ * Design: the sender declares its own bandwidth and ignores loss.
-+ *
-+ *     cwnd = brutaltx * srtt * 2 / ack_rate
-+ *     pace = brutaltx / ack_rate
-+ *
-+ * ack_rate is the ack/(ack+loss) ratio over a 5 second sliding window,
-+ * clamped to [0.8, 1.0].  A lower ack_rate means a HIGHER send rate: this
-+ * is loss compensation, not backoff.  Losses never shrink the window.
-+ *
-+ * Costs: this is only as good as the configured rate.  Overshooting
-+ * builds a standing queue at the bottleneck (bufferbloat) and, because
-+ * nothing backs off, does not self-correct.  Read the rate as the safe
-+ * rate, not the peak rate.
-+ */
-+
-+#define NGX_QUIC_BRUTAL_SLOTS          5    /* 5 x 1s window */
-+#define NGX_QUIC_BRUTAL_MIN_SAMPLES    50
-+#define NGX_QUIC_BRUTAL_MIN_ACK_RATE   800  /* 0.800, milli-units */
-+#define NGX_QUIC_BRUTAL_CWND_MULT      2
-+#define NGX_QUIC_BRUTAL_BURST_PKTS     10
-+#define NGX_QUIC_BRUTAL_BURST_MS       4    /* 4 * MinPacingDelay(1ms) */
-+#define NGX_QUIC_BRUTAL_IDLE_RESET     2000 /* ms; clear loss history */
-+#define NGX_QUIC_BRUTAL_PACE_QUANTUM   1    /* ms; minimum timer granularity */
-+
-+
-+typedef struct {
-+    ngx_uint_t      enabled;            /* set once, at connection setup */
-+    ngx_uint_t      ack_rate_milli;     /* 800..1000 */
-+    size_t          bps;                /* bytes/sec, copied from conf */
-+
-+    /* 5 second sliding window, slot index is based on seconds */
-+    time_t          slot_sec[NGX_QUIC_BRUTAL_SLOTS];
-+    uint64_t        slot_ack[NGX_QUIC_BRUTAL_SLOTS];
-+    uint64_t        slot_lost[NGX_QUIC_BRUTAL_SLOTS];
-+
-+    /* token bucket, bytes*1000 to keep millisecond resolution exact */
-+    uint64_t        budget_mb;
-+    ngx_msec_t      budget_msec;
-+    ngx_msec_t      last_sent;
-+
-+    /*
-+     * Private pacing timer.  Deliberately not qc->push: ngx_add_timer()
-+     * ignores a new timer whose key is within NGX_TIMER_LAZY_DELAY
-+     * (300ms) of the armed one, so a 2ms pacing request would be
-+     * silently stretched to whatever the pending push timer holds.
-+     */
-+    ngx_event_t     pace;
-+} ngx_quic_brutal_t;
-+
-+
-+void ngx_quic_brutal_init(ngx_connection_t *c, ngx_quic_connection_t *qc,
-+    size_t bps);
-+void ngx_quic_brutal_reset(ngx_connection_t *c, ngx_quic_connection_t *qc);
-+void ngx_quic_brutal_on_ack_event(ngx_connection_t *c, uint64_t acked,
-+    uint64_t nlost);
-+void ngx_quic_brutal_on_idle(ngx_connection_t *c, ngx_uint_t idle);
-+ngx_uint_t ngx_quic_brutal_has_budget(ngx_connection_t *c, size_t need);
-+void ngx_quic_brutal_on_sent(ngx_connection_t *c, size_t bytes);
-+void ngx_quic_brutal_pace_arm(ngx_connection_t *c);
-+void ngx_quic_brutal_update_window(ngx_connection_t *c);
-+
-+
-+#endif /* _NGX_EVENT_QUIC_BRUTAL_H_INCLUDED_ */
---- a/src/event/quic/ngx_event_quic_brutal.c
+diff --git a/src/event/quic/ngx_event_quic_brutal.c b/src/event/quic/ngx_event_quic_brutal.c
+new file mode 100644
+index 0000000..e245c32
+--- /dev/null
 +++ b/src/event/quic/ngx_event_quic_brutal.c
-@@ -0,0 +1,440 @@
+@@ -0,0 +1,465 @@
 +/*
 + * Copyright (C) Nginx, Inc.
 + */
@@ -473,19 +255,44 @@
 +}
 +
 +
++/*
++ * Detach the pacing timer from the event loop.  Must be called before
++ * anything clears qc->congestion: the timer node is linked into the
++ * global rbtree (or the posted queue), and zeroing the owning struct
++ * without unlinking it leaves the tree holding a node with NULL links.
++ */
++void
++ngx_quic_brutal_cleanup(ngx_quic_connection_t *qc)
++{
++    ngx_quic_congestion_t  *cg;
++
++    cg = &qc->congestion;
++
++    if (!cg->brutal.enabled) {
++        return;
++    }
++
++    if (cg->brutal.pace.timer_set) {
++        ngx_del_timer(&cg->brutal.pace);
++    }
++
++    if (cg->brutal.pace.posted) {
++        ngx_delete_posted_event(&cg->brutal.pace);
++    }
++}
++
++
 +void
 +ngx_quic_brutal_reset(ngx_connection_t *c, ngx_quic_connection_t *qc)
 +{
-+    ngx_uint_t  enabled;
-+
 +    /*
-+     * Called after path migration, where ngx_memzero() wiped the whole
-+     * congestion struct.  Only the derived state can be rebuilt here:
-+     * the configured rate and the private event wiring are gone.
++     * Called right after a path change cleared the congestion struct,
++     * so only the derived state can be rebuilt here; the configured
++     * rate comes back from qc->conf, and ngx_quic_brutal_init()
++     * rewires the private event.  The caller is responsible for
++     * having run ngx_quic_brutal_cleanup() before the clear.
 +     */
-+    enabled = (qc->conf->brutal_tx != 0);
-+
-+    ngx_quic_brutal_init(c, qc, enabled ? qc->conf->brutal_tx : 0);
++    ngx_quic_brutal_init(c, qc, qc->conf->brutal_tx);
 +}
 +
 +
@@ -833,3 +640,328 @@
 +     */
 +    (void) idle;
 +}
+diff --git a/src/event/quic/ngx_event_quic_brutal.h b/src/event/quic/ngx_event_quic_brutal.h
+new file mode 100644
+index 0000000..5cdc24c
+--- /dev/null
++++ b/src/event/quic/ngx_event_quic_brutal.h
+@@ -0,0 +1,88 @@
++/*
++ * Copyright (C) Nginx, Inc.
++ */
++
++
++#ifndef _NGX_EVENT_QUIC_BRUTAL_H_INCLUDED_
++#define _NGX_EVENT_QUIC_BRUTAL_H_INCLUDED_
++
++
++#include <ngx_config.h>
++#include <ngx_core.h>
++#include <ngx_event.h>
++
++
++/*
++ * Brutal congestion control, ported from hysteria2.
++ *
++ * Design: the sender declares its own bandwidth and ignores loss.
++ *
++ *     cwnd = brutaltx * srtt * 2 / ack_rate
++ *     pace = brutaltx / ack_rate
++ *
++ * ack_rate is the ack/(ack+loss) ratio over a 5 second sliding window,
++ * clamped to [0.8, 1.0].  A lower ack_rate means a HIGHER send rate: this
++ * is loss compensation, not backoff.  Losses never shrink the window.
++ *
++ * Costs: this is only as good as the configured rate.  Overshooting
++ * builds a standing queue at the bottleneck (bufferbloat) and, because
++ * nothing backs off, does not self-correct.  Read the rate as the safe
++ * rate, not the peak rate.
++ */
++
++#define NGX_QUIC_BRUTAL_SLOTS          5    /* 5 x 1s window */
++#define NGX_QUIC_BRUTAL_MIN_SAMPLES    50
++#define NGX_QUIC_BRUTAL_MIN_ACK_RATE   800  /* 0.800, milli-units */
++#define NGX_QUIC_BRUTAL_CWND_MULT      2
++#define NGX_QUIC_BRUTAL_BURST_PKTS     10
++#define NGX_QUIC_BRUTAL_BURST_MS       4    /* 4 * MinPacingDelay(1ms) */
++#define NGX_QUIC_BRUTAL_IDLE_RESET     2000 /* ms; clear loss history */
++#define NGX_QUIC_BRUTAL_PACE_QUANTUM   1    /* ms; minimum timer granularity */
++
++
++typedef struct {
++    ngx_uint_t      enabled;            /* set once, at connection setup */
++    ngx_uint_t      ack_rate_milli;     /* 800..1000 */
++    size_t          bps;                /* bytes/sec, copied from conf */
++
++    /* 5 second sliding window, slot index is based on seconds */
++    time_t          slot_sec[NGX_QUIC_BRUTAL_SLOTS];
++    uint64_t        slot_ack[NGX_QUIC_BRUTAL_SLOTS];
++    uint64_t        slot_lost[NGX_QUIC_BRUTAL_SLOTS];
++
++    /* token bucket, bytes*1000 to keep millisecond resolution exact */
++    uint64_t        budget_mb;
++    ngx_msec_t      budget_msec;
++    ngx_msec_t      last_sent;
++
++    /*
++     * Private pacing timer.  Deliberately not qc->push: ngx_add_timer()
++     * ignores a new timer whose key is within NGX_TIMER_LAZY_DELAY
++     * (300ms) of the armed one, so a 2ms pacing request would be
++     * silently stretched to whatever the pending push timer holds.
++     *
++     * This member lives inside ngx_quic_congestion_t, which
++     * ngx_quic_handle_path_response_frame() clears with ngx_memzero()
++     * on a path change.  Every caller that does so MUST call
++     * ngx_quic_brutal_cleanup() first: a timer that is still linked
++     * into the global rbtree but has its links zeroed corrupts the
++     * tree, and ngx_event_expire_timers() then dereferences NULL.
++     */
++    ngx_event_t     pace;
++} ngx_quic_brutal_t;
++
++
++void ngx_quic_brutal_init(ngx_connection_t *c, ngx_quic_connection_t *qc,
++    size_t bps);
++void ngx_quic_brutal_cleanup(ngx_quic_connection_t *qc);
++void ngx_quic_brutal_reset(ngx_connection_t *c, ngx_quic_connection_t *qc);
++void ngx_quic_brutal_on_ack_event(ngx_connection_t *c, uint64_t acked,
++    uint64_t nlost);
++void ngx_quic_brutal_on_idle(ngx_connection_t *c, ngx_uint_t idle);
++ngx_uint_t ngx_quic_brutal_has_budget(ngx_connection_t *c, size_t need);
++void ngx_quic_brutal_on_sent(ngx_connection_t *c, size_t bytes);
++void ngx_quic_brutal_pace_arm(ngx_connection_t *c);
++void ngx_quic_brutal_update_window(ngx_connection_t *c);
++
++
++#endif /* _NGX_EVENT_QUIC_BRUTAL_H_INCLUDED_ */
+diff --git a/src/event/quic/ngx_event_quic_connection.h b/src/event/quic/ngx_event_quic_connection.h
+index 40873cf..eccbce2 100644
+--- a/src/event/quic/ngx_event_quic_connection.h
++++ b/src/event/quic/ngx_event_quic_connection.h
+@@ -48,6 +48,7 @@ typedef struct ngx_quic_keys_s        ngx_quic_keys_t;
+ #include <ngx_event_quic_ack.h>
+ #include <ngx_event_quic_output.h>
+ #include <ngx_event_quic_socket.h>
++#include <ngx_event_quic_brutal.h>
+ #if (NGX_QUIC_BPF)
+ #include <ngx_event_quic_bpf.h>
+ #endif
+@@ -186,6 +187,8 @@ typedef struct {
+     ngx_msec_t                        idle_start;
+     ngx_msec_t                        k;
+     ngx_uint_t                        idle; /* unsigned  idle:1; */
++
++    ngx_quic_brutal_t                 brutal;
+ } ngx_quic_congestion_t;
+ 
+ 
+diff --git a/src/event/quic/ngx_event_quic_migration.c b/src/event/quic/ngx_event_quic_migration.c
+index bbb1051..7dbaa70 100644
+--- a/src/event/quic/ngx_event_quic_migration.c
++++ b/src/event/quic/ngx_event_quic_migration.c
+@@ -180,6 +180,14 @@ valid:
+         ctx = ngx_quic_get_send_ctx(qc, NGX_QUIC_ENCRYPTION_APPLICATION);
+         qc->rst_pnum = ctx->pnum;
+ 
++        /*
++         * Brutal keeps its pacing timer inside the congestion struct.
++         * Unlink it before the clear, otherwise the global timer rbtree
++         * keeps a node whose links have just been zeroed and the next
++         * ngx_event_expire_timers() walks into NULL.
++         */
++        ngx_quic_brutal_cleanup(qc);
++
+         ngx_memzero(&qc->congestion, sizeof(ngx_quic_congestion_t));
+ 
+         qc->congestion.window = ngx_min(10 * NGX_QUIC_MIN_INITIAL_SIZE,
+@@ -189,6 +197,8 @@ valid:
+         qc->congestion.mtu = NGX_QUIC_MIN_INITIAL_SIZE;
+         qc->congestion.recovery_start = ngx_current_msec - 1;
+ 
++        ngx_quic_brutal_reset(c, qc);
++
+         ngx_quic_init_rtt(qc);
+     }
+ 
+diff --git a/src/event/quic/ngx_event_quic_output.c b/src/event/quic/ngx_event_quic_output.c
+index cb75d28..b18ed34 100644
+--- a/src/event/quic/ngx_event_quic_output.c
++++ b/src/event/quic/ngx_event_quic_output.c
+@@ -118,7 +118,7 @@ ngx_quic_create_datagrams(ngx_connection_t *c)
+     ssize_t                 n;
+     u_char                 *p;
+     uint64_t                preserved_pnum[NGX_QUIC_SEND_CTX_LAST];
+-    ngx_uint_t              i, pad;
++    ngx_uint_t              i, pad, pace_limited;
+     ngx_quic_path_t        *path;
+     ngx_quic_send_ctx_t    *ctx;
+     ngx_quic_congestion_t  *cg;
+@@ -134,6 +134,16 @@ ngx_quic_create_datagrams(ngx_connection_t *c)
+ #endif
+ 
+     do {
++        /*
++         * Out of pacing budget.  Do not break here: an ACK still has to
++         * go out, or the peer's own sending stalls for as long as it
++         * takes us to earn one MTU of budget.  Emit a single ACK-only
++         * datagram and stop, the same way the congestion window being
++         * full is handled below.
++         */
++        pace_limited = (cg->brutal.enabled
++                        && !ngx_quic_brutal_has_budget(c, path->mtu));
++
+         p = dst;
+ 
+         len = ngx_quic_path_limit(c, path, path->mtu);
+@@ -160,7 +170,8 @@ ngx_quic_create_datagrams(ngx_connection_t *c)
+             }
+ 
+             n = ngx_quic_output_packet(c, ctx, p, len, min,
+-                                       cg->in_flight >= cg->window);
++                                       (cg->in_flight >= cg->window)
++                                       || pace_limited);
+             if (n == NGX_ERROR) {
+                 return NGX_ERROR;
+             }
+@@ -171,6 +182,16 @@ ngx_quic_create_datagrams(ngx_connection_t *c)
+ 
+         len = p - dst;
+         if (len == 0) {
++            /*
++             * Nothing to send at all, or nothing but ACK-none was allowed
++             * through.  Either way the budget is what holds us back, so
++             * arm the pacer; without this a paced connection with no ACK
++             * pending would simply stop until the next unrelated push.
++             */
++            if (pace_limited) {
++                ngx_quic_brutal_pace_arm(c);
++            }
++
+             break;
+         }
+ 
+@@ -188,8 +209,18 @@ ngx_quic_create_datagrams(ngx_connection_t *c)
+ 
+         ngx_quic_commit_send(c);
+ 
++        if (cg->brutal.enabled) {
++            ngx_quic_brutal_on_sent(c, len);
++        }
++
+         path->sent += len;
+ 
++        if (pace_limited) {
++            /* the ACK-only datagram above was all we could afford */
++            ngx_quic_brutal_pace_arm(c);
++            break;
++        }
++
+     } while (cg->in_flight < cg->window);
+ 
+     return NGX_OK;
+@@ -322,6 +353,12 @@ ngx_quic_allow_segmentation(ngx_connection_t *c)
+             return 0;
+         }
+ 
++        if (qc->congestion.brutal.enabled
++            && !ngx_quic_brutal_has_budget(c, len * 3)) {
++            /* not enough budget for a batch: emit single datagrams */
++            return 0;
++        }
++
+         if (bytes > len * 3) {
+             /* require at least ~3 full packets to batch */
+             return 1;
+@@ -338,7 +375,7 @@ ngx_quic_create_segments(ngx_connection_t *c)
+     size_t                  len, segsize;
+     ssize_t                 n;
+     u_char                 *p, *end;
+-    ngx_uint_t              nseg, level;
++    ngx_uint_t              nseg, level, budget_ok, budget_blocked;
+     ngx_quic_path_t        *path;
+     ngx_quic_send_ctx_t    *ctx;
+     ngx_quic_congestion_t  *cg;
+@@ -369,7 +406,25 @@ ngx_quic_create_segments(ngx_connection_t *c)
+ 
+         len = ngx_min(segsize, (size_t) (end - p));
+ 
+-        if (len && cg->in_flight + (p - dst) < cg->window) {
++        /*
++         * Ask for the whole batch, not just the next segment: the
++         * budget is only debited in on_sent() once the batch has been
++         * handed to sendmsg(), so checking segsize alone tests the same
++         * value on every iteration of the loop and lets one GSO batch
++         * (up to NGX_QUIC_MAX_SEGMENTS datagrams) through on a single
++         * segment's worth of tokens.
++         */
++        budget_ok = 1;
++        budget_blocked = 0;
++
++        if (cg->brutal.enabled
++            && !ngx_quic_brutal_has_budget(c, (p - dst) + segsize))
++        {
++            budget_ok = 0;
++            budget_blocked = 1;
++        }
++
++        if (len && cg->in_flight + (p - dst) < cg->window && budget_ok) {
+ 
+             n = ngx_quic_output_packet(c, ctx, p, len, len, 0);
+             if (n == NGX_ERROR) {
+@@ -386,6 +441,11 @@ ngx_quic_create_segments(ngx_connection_t *c)
+         }
+ 
+         if (p == dst) {
++            if (budget_blocked) {
++                /* nothing to send and no tokens: wait for the pacer */
++                ngx_quic_brutal_pace_arm(c);
++            }
++
+             break;
+         }
+ 
+@@ -404,6 +464,10 @@ ngx_quic_create_segments(ngx_connection_t *c)
+ 
+             ngx_quic_commit_send(c);
+ 
++            if (cg->brutal.enabled) {
++                ngx_quic_brutal_on_sent(c, p - dst);
++            }
++
+             path->sent += n;
+ 
+             p = dst;
+diff --git a/src/http/v3/ngx_http_v3_module.c b/src/http/v3/ngx_http_v3_module.c
+index 9e5dc4c..9d156b8 100644
+--- a/src/http/v3/ngx_http_v3_module.c
++++ b/src/http/v3/ngx_http_v3_module.c
+@@ -64,6 +64,13 @@ static ngx_command_t  ngx_http_v3_commands[] = {
+       offsetof(ngx_http_v3_srv_conf_t, quic.gso_enabled),
+       NULL },
+ 
++    { ngx_string("quic_brutal_tx"),
++      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
++      ngx_conf_set_size_slot,
++      NGX_HTTP_SRV_CONF_OFFSET,
++      offsetof(ngx_http_v3_srv_conf_t, quic.brutal_tx),
++      NULL },
++
+     { ngx_string("quic_host_key"),
+       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+       ngx_http_quic_host_key,
+@@ -206,6 +213,7 @@ ngx_http_v3_create_srv_conf(ngx_conf_t *cf)
+     h3scf->quic.max_concurrent_streams_uni = NGX_HTTP_V3_MAX_UNI_STREAMS;
+     h3scf->quic.retry = NGX_CONF_UNSET;
+     h3scf->quic.gso_enabled = NGX_CONF_UNSET;
++    h3scf->quic.brutal_tx = NGX_CONF_UNSET_SIZE;
+     h3scf->quic.stream_close_code = NGX_HTTP_V3_ERR_NO_ERROR;
+     h3scf->quic.stream_reject_code_bidi = NGX_HTTP_V3_ERR_REQUEST_REJECTED;
+     h3scf->quic.active_connection_id_limit = NGX_CONF_UNSET_UINT;
+@@ -243,6 +251,7 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
+ 
+     ngx_conf_merge_value(conf->quic.retry, prev->quic.retry, 0);
+     ngx_conf_merge_value(conf->quic.gso_enabled, prev->quic.gso_enabled, 0);
++    ngx_conf_merge_size_value(conf->quic.brutal_tx, prev->quic.brutal_tx, 0);
+ 
+     ngx_conf_merge_str_value(conf->quic.host_key, prev->quic.host_key, "");
+ 
