@@ -605,5 +605,17 @@ patch -p1 < ../patches/nginx-brutal-quic.patch
 
 ## 许可
 
-补丁本身遵循 nginx 的 BSD-2-Clause（见 `nginx` 源码中的 `LICENSE`）。
-Brutal 算法移植自 [apernet/hysteria](https://github.com/apernet/hysteria)（MIT）。
+本仓库采用 **BSD-2-Clause**，全文见 [`LICENSE`](LICENSE)。
+
+补丁是 nginx 的衍生作品，因此 nginx 原有的版权声明随补丁一并保留；
+无论以何种方式分发编译产物，nginx 的 BSD-2-Clause 条款都同样适用。
+
+`ngx_event_quic_brutal.{c,h}` 是新写的代码，版权归本仓库作者，
+文件头标注了 `Copyright (C) 2026 iliyian`。
+
+第三方组件的署名集中列在 [`NOTICE`](NOTICE)：nginx、apernet/hysteria，
+以及 `tools/` 里用到的 quic-go。
+
+Brutal 算法移植自 [apernet/hysteria](https://github.com/apernet/hysteria)，
+该项目以 **MIT** 许可发布（Copyright 2023 Toby）。MIT 与 BSD-2-Clause 兼容，
+本仓库在 `LICENSE` 里附上了 MIT 全文与版权声明，以履行署名义务。

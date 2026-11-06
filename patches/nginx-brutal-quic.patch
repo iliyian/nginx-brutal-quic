@@ -171,12 +171,16 @@ index abd3f7a..b42d56f 100644
      now = ngx_current_msec;
 diff --git a/src/event/quic/ngx_event_quic_brutal.c b/src/event/quic/ngx_event_quic_brutal.c
 new file mode 100644
-index 0000000..e245c32
+index 0000000..51e8cf9
 --- /dev/null
 +++ b/src/event/quic/ngx_event_quic_brutal.c
-@@ -0,0 +1,465 @@
+@@ -0,0 +1,469 @@
 +/*
-+ * Copyright (C) Nginx, Inc.
++ * Copyright (C) 2026 iliyian
++ *
++ * The Brutal congestion control algorithm is ported from
++ * apernet/hysteria (https://github.com/apernet/hysteria),
++ * which is distributed under the MIT license.  See LICENSE.
 + */
 +
 +
@@ -642,12 +646,16 @@ index 0000000..e245c32
 +}
 diff --git a/src/event/quic/ngx_event_quic_brutal.h b/src/event/quic/ngx_event_quic_brutal.h
 new file mode 100644
-index 0000000..5cdc24c
+index 0000000..9b26eb4
 --- /dev/null
 +++ b/src/event/quic/ngx_event_quic_brutal.h
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,92 @@
 +/*
-+ * Copyright (C) Nginx, Inc.
++ * Copyright (C) 2026 iliyian
++ *
++ * The Brutal congestion control algorithm is ported from
++ * apernet/hysteria (https://github.com/apernet/hysteria),
++ * which is distributed under the MIT license.  See LICENSE.
 + */
 +
 +

@@ -102,7 +102,8 @@ FROM ${BASE}
 ARG NGINX_VERSION
 LABEL org.opencontainers.image.title="nginx-brutal-quic" \
       org.opencontainers.image.description="nginx ${NGINX_VERSION} with hysteria2-style Brutal congestion control for QUIC" \
-      org.opencontainers.image.source="https://github.com/iliyian/nginx-brutal-quic"
+      org.opencontainers.image.source="https://github.com/iliyian/nginx-brutal-quic" \
+      org.opencontainers.image.licenses="BSD-2-Clause"
 
 COPY --from=builder /src/objs/nginx /usr/sbin/nginx
 

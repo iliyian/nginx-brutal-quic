@@ -1,0 +1,20 @@
+nginx-brutal-quic
+=================
+
+Copyright (C) 2026 iliyian
+
+This product includes nginx, which is
+Copyright (C) 2002-2021 Igor Sysoev
+Copyright (C) 2011-2026 Nginx, Inc.
+and is distributed under the BSD-2-Clause license.
+
+This product includes code derived from apernet/hysteria,
+Copyright 2023 Toby, distributed under the MIT license.
+
+The Brutal congestion control algorithm originates from
+apernet/hysteria: https://github.com/apernet/hysteria
+
+The Go tools under tools/ depend on github.com/quic-go/quic-go,
+which is distributed under the MIT license.
+
+Full license texts are in the LICENSE file.
