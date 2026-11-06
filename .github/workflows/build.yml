@@ -18,7 +18,7 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Verify patch applies to upstream
         run: |
           set -euo pipefail
@@ -46,7 +46,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: docker/setup-buildx-action@v3
 
@@ -68,16 +68,25 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       # Push by digest only; the merge job assembles the final tags.
-      # pull_request runs still build, but do not push.
+      # Built in a shell step rather than an expression: format() does not
+      # resolve env.* here, and a bare "ghcr.io" gets treated as a Docker Hub
+      # repository, which then fails against auth.docker.io.
+      - name: Compute push spec
+        id: out
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "spec=type=cacheonly" >> "$GITHUB_OUTPUT"
+          else
+            echo "spec=type=image,name=${REGISTRY}/${IMAGE_NAME},push-by-digest=true,name-canonical=true,push=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          outputs: >-
-            ${{ github.event_name != 'pull_request'
-                && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.REGISTRY)
-                || 'type=cacheonly' }}
+          outputs: ${{ steps.out.outputs.spec }}
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
           build-args: |
