@@ -1,0 +1,6 @@
+go 1.24
+
+use (
+	./tools/h3probe
+	./tools/h3upstream
+)
