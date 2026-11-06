@@ -1,0 +1,8 @@
+*.o
+*.a
+objs/
+src.tar.gz
+nginx-*/
+nginx-brutal-quic
+cores/
+*.core
