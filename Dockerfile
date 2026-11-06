@@ -85,7 +85,7 @@ LABEL org.opencontainers.image.title="nginx-brutal-quic" \
       org.opencontainers.image.description="nginx ${NGINX_VERSION} with hysteria2-style Brutal congestion control for QUIC" \
       org.opencontainers.image.source="https://github.com/iliyian/nginx-brutal-quic"
 
-COPY --from=builder /stage/usr/sbin/nginx /usr/sbin/nginx
+COPY --from=builder /usr/sbin/nginx /usr/sbin/nginx
 
 # Sanity check: the binary must be for this image's architecture and must
 # carry the HTTP/3 module the patch hangs off of.
