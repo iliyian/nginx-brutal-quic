@@ -6,10 +6,12 @@
 ARG NGINX_VERSION=1.31.8
 ARG BASE=nginx:mainline
 
-FROM --platform=$BUILDPLATFORM debian:trixie AS builder
+# No --platform=$BUILDPLATFORM here on purpose. Pinning it would run this
+# stage on the build host's native arch and silently produce an x86 binary
+# inside the arm64 image. Letting qemu emulate is slower but correct.
+FROM debian:trixie AS builder
 
 ARG NGINX_VERSION
-ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential ca-certificates curl \
@@ -70,8 +72,10 @@ RUN ./configure \
         --with-stream_ssl_module \
         --with-stream_ssl_preread_module \
         --with-cc-opt='-O2 -Werror' \
-    && make -j"$(nproc)" \
-    && make install DESTDIR=/stage
+    && make -j"$(nproc)"
+
+# Only the binary is taken from the build: the official image already ships
+# mime.types, the default conf tree, the nginx user and the module dir.
 
 
 FROM ${BASE}
@@ -83,6 +87,9 @@ LABEL org.opencontainers.image.title="nginx-brutal-quic" \
 
 COPY --from=builder /stage/usr/sbin/nginx /usr/sbin/nginx
 
-# Sanity check at build time: the directive must be registered.
-RUN nginx -V 2>&1 | grep -q with-http_v3_module \
-    && echo "nginx $(nginx -v 2>&1 | cut -d/ -f2) with brutal-quic built"
+# Sanity check: the binary must be for this image's architecture and must
+# carry the HTTP/3 module the patch hangs off of.
+RUN set -eu; \
+    nginx -V 2>&1 | grep -q with-http_v3_module; \
+    nginx -v 2>&1; \
+    echo "arch=$(uname -m)"
