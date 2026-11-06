@@ -128,17 +128,19 @@ http {
 docker pull ghcr.io/iliyian/nginx-brutal-quic:latest
 ```
 
-替换现有 nginx 容器的镜像即可，配置和挂载都不用改：
+这是 `nginx:mainline` 的直接替换品：模块集、编译路径、`--with-compat` ABI 都一致。
+把现有容器编排文件里的 image 换掉、重新 `up -d` 即可，配置和挂载都不用改。
 
-```bash
-docker rm -f nginx
-docker run -d --name nginx \
-  --restart unless-stopped \
-  --network host \
-  -v /root/xray-config/nginx.conf:/etc/nginx/nginx.conf:ro \
-  -v /root/xray-config/ssl.conf:/etc/nginx/ssl.conf:ro \
-  -v /var/log/nginx:/var/log/nginx \
-  ghcr.io/iliyian/nginx-brutal-quic:latest
+```yaml
+services:
+  nginx:
+    image: ghcr.io/iliyian/nginx-brutal-quic:latest   # ← 只改这一行
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+      - ./logs:/var/log/nginx
 ```
 
 ### 启用
@@ -148,14 +150,19 @@ docker run -d --name nginx \
 ```nginx
 server {
     listen 443 quic reuseport;
-    server_name tunnel.example.com;
+    server_name example.com;
+
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
 
     http3 on;
     http3_stream_buffer_size 1m;   # 强烈建议，见下方说明
     quic_brutal_tx 20m;            # ← 就这一行
 
     location / {
-        grpc_pass unix:/run/xray.sock;
+        # 换成你自己的上游；Unix socket、h2 后端、静态文件都行
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
     }
 }
 ```
@@ -418,7 +425,7 @@ make -j"$(nproc)"
 ### h3upstream
 
 一次性 HTTP 上游，监听 Unix socket，返回指定大小的流式响应。
-**刻意独立于 Xray 等生产服务**，避免测试污染。
+**刻意独立于任何生产服务**，避免测试污染。
 
 ```bash
 go run ./tools/h3upstream -addr unix:/tmp/h3up.sock -size 4G

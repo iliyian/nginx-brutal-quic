@@ -1,6 +1,6 @@
 // h3upstream: disposable HTTP upstream for benchmarking.
 //
-// Standalone on purpose: it does not touch Xray or any production service.
+// Standalone on purpose: it does not touch any production service.
 package main
 
 import (
