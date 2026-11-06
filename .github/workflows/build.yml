@@ -12,6 +12,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   NGINX_VERSION: 1.31.8
+  NGINX_SHA256: 0652b760b3b772d2ec17b47c2fc15d9a95e6fe35cd5b877eadc1a62d9bc75af1
 
 jobs:
   # Cheap first gate: fail fast if the patch no longer applies.
@@ -22,7 +23,10 @@ jobs:
       - name: Verify patch applies to upstream
         run: |
           set -euo pipefail
-          curl -fsSL "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz" | tar xz
+          curl -fsSL -o nginx.tar.gz \
+            "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz"
+          echo "${NGINX_SHA256}  nginx.tar.gz" | sha256sum -c -
+          tar xzf nginx.tar.gz
           cd "nginx-${NGINX_VERSION}"
           patch -p1 --dry-run < ../patches/nginx-brutal-quic.patch
 
