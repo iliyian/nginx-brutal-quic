@@ -3,16 +3,16 @@
 # Two-stage: compile against the same Debian release that the runtime image
 # uses, otherwise the binary's glibc/OpenSSL symbols will not resolve.
 
-ARG NGINX_VERSION=1.31.8
+ARG NGINX_VERSION=1.31.9
 
 # Pinned to the exact release the binary is compiled from.  Floating on
 # nginx:mainline would eventually pair a 1.31.8 binary with a newer image
 # whose bundled dynamic modules are signature-incompatible: load_module
 # then refuses to load them at startup.
-ARG BASE=nginx:1.31.8
+ARG BASE=nginx:1.31.9
 
 # sha256 of https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz
-ARG NGINX_SHA256=0652b760b3b772d2ec17b47c2fc15d9a95e6fe35cd5b877eadc1a62d9bc75af1
+ARG NGINX_SHA256=a11c5eeee2e257f4478f0e649f84b0040787d277d2d3e5233952aa6b6dcb80ad
 
 # No --platform=$BUILDPLATFORM here on purpose. Pinning it would run this
 # stage on the build host's native arch and silently produce an x86 binary

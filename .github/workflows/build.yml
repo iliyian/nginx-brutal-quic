@@ -11,8 +11,8 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  NGINX_VERSION: 1.31.8
-  NGINX_SHA256: 0652b760b3b772d2ec17b47c2fc15d9a95e6fe35cd5b877eadc1a62d9bc75af1
+  NGINX_VERSION: 1.31.9
+  NGINX_SHA256: a11c5eeee2e257f4478f0e649f84b0040787d277d2d3e5233952aa6b6dcb80ad
 
 jobs:
   # Cheap first gate: fail fast if the patch no longer applies.

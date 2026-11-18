@@ -66,7 +66,7 @@ if (cg->brutal.enabled) {
 
 ### 改动只增不删
 
-对比上游 nginx 1.31.8，CUBIC 的实现代码**没有任何一行被删除或修改**，只有：
+对比上游 nginx 1.31.9，CUBIC 的实现代码**没有任何一行被删除或修改**，只有：
 
 - 前置的分支判断（纯新增）
 - 新文件 `ngx_event_quic_brutal.{c,h}`
@@ -369,7 +369,7 @@ ngx_quic_brutal_reset(c, qc);     /* 用 qc->conf->brutal_tx 重建 */
    `ngx_add_timer` 精度是毫秒，所以 pace 定时器最快 1ms 一次。预算不足的连接大约每秒唤醒
    `max(1000, rate/mtu)` 次。适合少量大流量连接，不适合上万并发。
 
-5. **已在 1.31.8 上验证。**
+5. **已在 1.31.8、1.31.9 上验证。**
    其它版本需要确认补丁能否干净应用（CI 里会做 `patch --dry-run`）。
 
 6. **`quic_bpf` / 多地址迁移场景未做压力测试。**
@@ -449,8 +449,8 @@ docker build -t nginx-brutal-quic .
 ### 手动
 
 ```bash
-VERSION=1.31.8
-SHA256=0652b760b3b772d2ec17b47c2fc15d9a95e6fe35cd5b877eadc1a62d9bc75af1
+VERSION=1.31.9
+SHA256=a11c5eeee2e257f4478f0e649f84b0040787d277d2d3e5233952aa6b6dcb80ad
 
 curl -fsSL -O "https://nginx.org/download/nginx-${VERSION}.tar.gz"
 echo "${SHA256}  nginx-${VERSION}.tar.gz" | sha256sum -c -
